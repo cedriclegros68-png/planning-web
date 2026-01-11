@@ -1,0 +1,10 @@
+# Secrets
+token.json
+credentials.json
+
+# Fichiers temporaires
+uploads/
+
+# Python
+__pycache__/
+*.pyc
