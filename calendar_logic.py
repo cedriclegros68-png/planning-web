@@ -2,11 +2,11 @@ import os
 import re
 from datetime import datetime, timedelta
 
+from docx import Document
+
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-
-from docx import Document
 
 
 # ==========================
@@ -23,21 +23,25 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 def get_service():
     creds = None
 
-    # Charger token.json s'il existe
+    # 1️⃣ Charger token.json s'il existe
     if os.path.exists("token.json"):
         creds = Credentials.from_authorized_user_file("token.json", SCOPES)
 
-    # Si pas de credentials ou invalides → OAuth
+    # 2️⃣ Si pas de credentials valides → OAuth
     if not creds or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(
             "credentials.json",
             SCOPES
         )
 
-        # IMPORTANT : run_console fonctionne sur Render
-        creds = flow.run_console()
+        # ⚠️ Compatible serveurs cloud (Render)
+        creds = flow.run_local_server(
+            host="0.0.0.0",
+            port=8080,
+            open_browser=False
+        )
 
-        # Sauvegarde token.json
+        # 3️⃣ Sauvegarder token.json
         with open("token.json", "w", encoding="utf-8") as token:
             token.write(creds.to_json())
 
@@ -45,7 +49,7 @@ def get_service():
 
 
 # ==========================
-# DOCX → CALENDAR
+# DOCX → GOOGLE CALENDAR
 # ==========================
 
 def process_docx(docx_path: str):
@@ -56,12 +60,10 @@ def process_docx(docx_path: str):
         for row in table.rows:
             cells = [c.text.strip() for c in row.cells]
 
-            # Sécurité minimale
             if len(cells) < 6:
                 continue
 
             date_time = cells[0]
-            title = cells[5]
             prestation = cells[3]
             contact = cells[4]
             address = cells[5]
@@ -69,28 +71,26 @@ def process_docx(docx_path: str):
             # --------------------------
             # DATE & HEURE
             # --------------------------
-            try:
-                match = re.search(
-                    r"(\d{2}/\d{2}/\d{2}).*?(\d{2}:\d{2})",
-                    date_time,
-                    re.S
-                )
-                if not match:
-                    continue
-
-                date_str, time_str = match.groups()
-                start = datetime.strptime(
-                    f"{date_str} {time_str}",
-                    "%d/%m/%y %H:%M"
-                )
-                end = start + timedelta(hours=1)
-            except Exception:
+            match = re.search(
+                r"(\d{2}/\d{2}/\d{2}).*?(\d{2}:\d{2})",
+                date_time,
+                re.S
+            )
+            if not match:
                 continue
 
+            date_str, time_str = match.groups()
+
+            start = datetime.strptime(
+                f"{date_str} {time_str}",
+                "%d/%m/%y %H:%M"
+            )
+            end = start + timedelta(hours=1)
+
             # --------------------------
-            # TITRE ÉVÉNEMENT
+            # TITRE
             # --------------------------
-            summary = f"{title}\n{prestation}"
+            summary = prestation
 
             # --------------------------
             # DESCRIPTION
