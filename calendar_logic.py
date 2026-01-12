@@ -1,89 +1,120 @@
 import os
 import re
 from datetime import datetime, timedelta
-from docx import Document
-from googleapiclient.discovery import build
+
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+
+from docx import Document
+
+
+# ==========================
+# CONFIG
+# ==========================
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
-TIMEZONE = "Europe/Paris"
+
+
+# ==========================
+# GOOGLE CALENDAR SERVICE
+# ==========================
 
 def get_service():
-    creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    creds = None
+
+    # Charger token.json s'il existe
+    if os.path.exists("token.json"):
+        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+
+    # Si pas de credentials ou invalides → OAuth
+    if not creds or not creds.valid:
+        flow = InstalledAppFlow.from_client_secrets_file(
+            "credentials.json",
+            SCOPES
+        )
+
+        # IMPORTANT : run_console fonctionne sur Render
+        creds = flow.run_console()
+
+        # Sauvegarde token.json
+        with open("token.json", "w", encoding="utf-8") as token:
+            token.write(creds.to_json())
+
     return build("calendar", "v3", credentials=creds)
 
-def detect_icons(text):
-    icons = []
-    t = text.lower()
 
-    if "photos" in t:
-        icons.append("🔴")
+# ==========================
+# DOCX → CALENDAR
+# ==========================
 
-    if (
-        ("vp18" in t or "el-vp18" in t or " 18 " in t)
-        and "kva" not in t
-    ):
-        icons.append("🟠")
-
-    if "qd" in t:
-        icons.append("🟣")
-
-    return " ".join(icons)
-
-def process_docx(path):
+def process_docx(docx_path: str):
     service = get_service()
-    filename = os.path.basename(path)
+    doc = Document(docx_path)
 
-    # supprimer anciens événements
-    events = service.events().list(
-        calendarId="primary",
-        q=f"SOURCE_DOCX={filename}"
-    ).execute()
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
 
-    for ev in events.get("items", []):
-        service.events().delete(
-            calendarId="primary",
-            eventId=ev["id"]
-        ).execute()
+            # Sécurité minimale
+            if len(cells) < 6:
+                continue
 
-    doc = Document(path)
-    table = doc.tables[1]
+            date_time = cells[0]
+            title = cells[5]
+            prestation = cells[3]
+            contact = cells[4]
+            address = cells[5]
 
-    for i, row in enumerate(table.rows):
-        if i == 0:
-            continue
+            # --------------------------
+            # DATE & HEURE
+            # --------------------------
+            try:
+                match = re.search(
+                    r"(\d{2}/\d{2}/\d{2}).*?(\d{2}:\d{2})",
+                    date_time,
+                    re.S
+                )
+                if not match:
+                    continue
 
-        cells = [c.text.strip() for c in row.cells]
-        full_text = " ".join(cells)
+                date_str, time_str = match.groups()
+                start = datetime.strptime(
+                    f"{date_str} {time_str}",
+                    "%d/%m/%y %H:%M"
+                )
+                end = start + timedelta(hours=1)
+            except Exception:
+                continue
 
-        m_date = re.search(r"(\d{2}/\d{2}/\d{2})", cells[0])
-        m_time = re.search(r"a\s*(\d{2}:\d{2})", cells[0])
-        if not m_date or not m_time:
-            continue
+            # --------------------------
+            # TITRE ÉVÉNEMENT
+            # --------------------------
+            summary = f"{title}\n{prestation}"
 
-        date = datetime.strptime(m_date.group(1), "%d/%m/%y").date()
-        time_ = datetime.strptime(m_time.group(1), "%H:%M").time()
+            # --------------------------
+            # DESCRIPTION
+            # --------------------------
+            description = f"{contact}\n\n{address}"
 
-        try:
-            duration = timedelta(hours=float(cells[2].replace(",", ".")))
-        except:
-            continue
+            # --------------------------
+            # EVENT
+            # --------------------------
+            event = {
+                "summary": summary,
+                "location": address.replace("\n", " "),
+                "description": description,
+                "start": {
+                    "dateTime": start.isoformat(),
+                    "timeZone": "Europe/Paris",
+                },
+                "end": {
+                    "dateTime": end.isoformat(),
+                    "timeZone": "Europe/Paris",
+                },
+            }
 
-        start = datetime.combine(date, time_)
-        end = start + duration
-
-        prestation = cells[3].replace("\n", " / ")
-        company = cells[5].splitlines()[0]
-        icons = detect_icons(full_text)
-
-        event = {
-            "summary": f"{icons} {company} – {prestation}".strip(),
-            "description": f"SOURCE_DOCX={filename}",
-            "start": {"dateTime": start.isoformat(), "timeZone": TIMEZONE},
-            "end": {"dateTime": end.isoformat(), "timeZone": TIMEZONE},
-        }
-
-        service.events().insert(
-            calendarId="primary",
-            body=event
-        ).execute()
+            service.events().insert(
+                calendarId="primary",
+                body=event
+            ).execute()
