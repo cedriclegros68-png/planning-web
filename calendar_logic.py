@@ -1,56 +1,22 @@
-import os
 import re
 from datetime import datetime, timedelta
-
 from docx import Document
 
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 
-# ==========================
-# CONFIG
-# ==========================
-
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
+SERVICE_ACCOUNT_FILE = "service_account.json"
 
-
-# ==========================
-# GOOGLE CALENDAR SERVICE
-# ==========================
 
 def get_service():
-    creds = None
-
-    # 1️⃣ Charger token.json s'il existe
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-
-    # 2️⃣ Si pas de credentials valides → OAuth
-    if not creds or not creds.valid:
-        flow = InstalledAppFlow.from_client_secrets_file(
-            "credentials.json",
-            SCOPES
-        )
-
-        # ⚠️ Compatible serveurs cloud (Render)
-        creds = flow.run_local_server(
-            host="0.0.0.0",
-            port=8080,
-            open_browser=False
-        )
-
-        # 3️⃣ Sauvegarder token.json
-        with open("token.json", "w", encoding="utf-8") as token:
-            token.write(creds.to_json())
-
+    creds = Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE,
+        scopes=SCOPES
+    )
     return build("calendar", "v3", credentials=creds)
 
-
-# ==========================
-# DOCX → GOOGLE CALENDAR
-# ==========================
 
 def process_docx(docx_path: str):
     service = get_service()
@@ -59,7 +25,6 @@ def process_docx(docx_path: str):
     for table in doc.tables:
         for row in table.rows:
             cells = [c.text.strip() for c in row.cells]
-
             if len(cells) < 6:
                 continue
 
@@ -68,9 +33,6 @@ def process_docx(docx_path: str):
             contact = cells[4]
             address = cells[5]
 
-            # --------------------------
-            # DATE & HEURE
-            # --------------------------
             match = re.search(
                 r"(\d{2}/\d{2}/\d{2}).*?(\d{2}:\d{2})",
                 date_time,
@@ -80,38 +42,15 @@ def process_docx(docx_path: str):
                 continue
 
             date_str, time_str = match.groups()
-
-            start = datetime.strptime(
-                f"{date_str} {time_str}",
-                "%d/%m/%y %H:%M"
-            )
+            start = datetime.strptime(f"{date_str} {time_str}", "%d/%m/%y %H:%M")
             end = start + timedelta(hours=1)
 
-            # --------------------------
-            # TITRE
-            # --------------------------
-            summary = prestation
-
-            # --------------------------
-            # DESCRIPTION
-            # --------------------------
-            description = f"{contact}\n\n{address}"
-
-            # --------------------------
-            # EVENT
-            # --------------------------
             event = {
-                "summary": summary,
+                "summary": prestation,
                 "location": address.replace("\n", " "),
-                "description": description,
-                "start": {
-                    "dateTime": start.isoformat(),
-                    "timeZone": "Europe/Paris",
-                },
-                "end": {
-                    "dateTime": end.isoformat(),
-                    "timeZone": "Europe/Paris",
-                },
+                "description": f"{contact}\n\n{address}",
+                "start": {"dateTime": start.isoformat(), "timeZone": "Europe/Paris"},
+                "end": {"dateTime": end.isoformat(), "timeZone": "Europe/Paris"},
             }
 
             service.events().insert(
